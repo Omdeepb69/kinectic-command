@@ -6,10 +6,9 @@ import sys
 import math
 import time
 from pygame.locals import *
-from OpenGL.GL import *
-from OpenGL.GLU import *
+from ursina import *
+from ursina import color as ursina_color
 
-# Configuration
 WEBCAM_INDEX = 0
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 800
@@ -30,18 +29,15 @@ DRONE_SPEED = 5
 DRONE_ROTATION_SPEED = 3
 DRONE_VERTICAL_SPEED = 3
 
-# 3D Mode settings
 ENABLE_3D = False
 ENABLE_2D = not ENABLE_3D
 GRID_SIZE = 20
 GRID_COUNT = 10
 
-# Drone trail settings
 ENABLE_TRAIL = True
 TRAIL_LENGTH = 50
 TRAIL_COLOR = (80, 130, 200, 150)
 
-# MediaPipe Hands setup
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
@@ -123,7 +119,6 @@ class GestureRecognizer:
         if not landmarks:
             return "NO_HAND", None, 0.0
             
-        # Get coordinates for key landmarks
         wrist = np.array([landmarks[mp_hands.HandLandmark.WRIST]['x'], landmarks[mp_hands.HandLandmark.WRIST]['y']])
         thumb_tip = np.array([landmarks[mp_hands.HandLandmark.THUMB_TIP]['x'], landmarks[mp_hands.HandLandmark.THUMB_TIP]['y']])
         thumb_ip = np.array([landmarks[mp_hands.HandLandmark.THUMB_IP]['x'], landmarks[mp_hands.HandLandmark.THUMB_IP]['y']])
@@ -145,25 +140,20 @@ class GestureRecognizer:
         pinky_pip = np.array([landmarks[mp_hands.HandLandmark.PINKY_PIP]['x'], landmarks[mp_hands.HandLandmark.PINKY_PIP]['y']])
         pinky_mcp = np.array([landmarks[mp_hands.HandLandmark.PINKY_MCP]['x'], landmarks[mp_hands.HandLandmark.PINKY_MCP]['y']])
 
-        # Calculate palm center
         palm_center = np.mean([index_mcp, middle_mcp, ring_mcp, pinky_mcp], axis=0)
         
-        # Calculate palm size
         palm_size = np.linalg.norm(wrist - middle_mcp)
         if palm_size < 1e-6: palm_size = 1e-6
 
-        # Get z-coordinate for 3D information
         z_value = landmarks[mp_hands.HandLandmark.WRIST]['z']
         hand_depth = z_value
 
-        # Calculate hand orientation
         palm_normal = np.cross(
             np.append(middle_mcp - index_mcp, 0), 
             np.append(ring_mcp - index_mcp, 0)
         )
         palm_facing_camera = palm_normal[2] < 0
 
-        # Check curl state of each finger
         fingers = [
             [landmarks[mp_hands.HandLandmark.INDEX_FINGER_TIP], landmarks[mp_hands.HandLandmark.INDEX_FINGER_PIP], landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP]],
             [landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_TIP], landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_PIP], landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]],
@@ -178,11 +168,9 @@ class GestureRecognizer:
         fingers_curled = [thumb_curled] + finger_curled
         fingers_extended = [not curled for curled in fingers_curled]
 
-        # Special detection for pinch gesture
         pinch_distance = np.linalg.norm(thumb_tip - index_tip) / palm_size
         is_pinching = pinch_distance < 0.15
 
-        # Get pointing direction if index finger is extended
         pointing_vector = None
         pointing_intensity = 0.0
         
@@ -196,25 +184,18 @@ class GestureRecognizer:
             if pointing_magnitude > 1e-6:
                 pointing_vector /= pointing_magnitude
 
-        # Gesture recognition logic
-        
-        # FIST - all fingers curled
         if all(fingers_curled):
             return "FIST", None, 0.0
             
-        # OPEN_PALM - all fingers extended
         elif all(fingers_extended):
             return "OPEN_PALM", None, 0.0
             
-        # THUMBS_UP - only thumb extended, palm not facing camera
         elif fingers_extended[0] and not any(fingers_extended[1:]) and not palm_facing_camera:
             return "THUMBS_UP", None, 0.0
             
-        # THUMBS_DOWN - only thumb extended, palm facing camera
         elif fingers_extended[0] and not any(fingers_extended[1:]) and palm_facing_camera:
             return "THUMBS_DOWN", None, 0.0
             
-        # PINCH - thumb and index finger close together
         elif is_pinching:
             pinch_center = (thumb_tip + index_tip) / 2
             pinch_vector = pinch_center - palm_center
@@ -223,7 +204,6 @@ class GestureRecognizer:
                 pinch_vector /= pinch_magnitude
             return "PINCH", pinch_vector, pinch_distance
             
-        # POINTING - index finger extended, all others curled 
         elif fingers_extended[1] and not any([fingers_extended[0]] + fingers_extended[2:]):
             if pointing_vector is not None:
                 angle = math.atan2(-pointing_vector[1], pointing_vector[0]) * 180 / math.pi
@@ -237,62 +217,47 @@ class GestureRecognizer:
                     return "POINTING_DOWN", pointing_vector, pointing_intensity
             return "POINTING", pointing_vector, pointing_intensity
             
-        # PEACE / VICTORY - index and middle fingers extended
         elif fingers_extended[1] and fingers_extended[2] and not fingers_extended[0] and not any(fingers_extended[3:]):
             return "PEACE", None, 0.0
             
-        # THREE - index, middle, and ring fingers extended
         elif fingers_extended[1] and fingers_extended[2] and fingers_extended[3] and not fingers_extended[0] and not fingers_extended[4]:
             return "THREE", None, 0.0
             
-        # ROCK_ON - index and pinky extended, others curled
         elif fingers_extended[1] and fingers_extended[4] and not any(fingers_extended[0:1] + fingers_extended[2:4]):
             return "ROCK_ON", None, 0.0
         
-        # CALL_ME - thumb, pinky extended, others curled
         elif fingers_extended[0] and fingers_extended[4] and not any(fingers_extended[1:4]):
             return "CALL_ME", None, 0.0
             
-        # OK_SIGN - thumb and index form a circle, others extended
         elif is_pinching and all(fingers_extended[2:]):
             return "OK_SIGN", None, 0.0
             
-        # Default - unknown gesture
         return "UNKNOWN", None, 0.0
 
     def get_stable_gesture(self, current_gesture, vector, intensity):
-        # Add current gesture to history
         self.gesture_history.append((current_gesture, vector, intensity))
         
-        # Keep only the last N gestures
         if len(self.gesture_history) > self.history_size:
             self.gesture_history.pop(0)
             
-        # Count occurrences of each gesture in history
         gesture_counts = {}
         for g, _, _ in self.gesture_history:
             gesture_counts[g] = gesture_counts.get(g, 0) + 1
             
-        # Find the most common gesture
         if gesture_counts:
             most_common = max(gesture_counts.items(), key=lambda x: x[1])
-            # If it appears in majority of frames, return it
             if most_common[1] >= self.history_size / 2:
                 self.current_gesture = most_common[0]
-                # Find the most recent occurrence of this gesture to get its vector
                 for g, v, i in reversed(self.gesture_history):
                     if g == most_common[0]:
                         return g, v, i
         
-        # Default to current gesture if no stability
         self.current_gesture = current_gesture
         return current_gesture, vector, intensity
 
     def draw_landmarks(self, image):
         if self.results and self.results.multi_hand_landmarks:
-            # Draw hand landmarks with custom visualization
             for hand_landmarks in self.results.multi_hand_landmarks:
-                # Draw standard connections first
                 mp_drawing.draw_landmarks(
                     image,
                     hand_landmarks,
@@ -300,19 +265,15 @@ class GestureRecognizer:
                     mp_drawing_styles.get_default_hand_landmarks_style(),
                     mp_drawing_styles.get_default_hand_connections_style())
                 
-            # Enhanced visualization based on detected gesture
             landmarks = self.get_landmarks()
             if landmarks:
-                # Draw gesture-specific highlights
                 if self.current_gesture == "FIST":
-                    # Highlight wrist in red
                     cv2.circle(image, 
                             (int(landmarks[mp_hands.HandLandmark.WRIST]['x'] * image.shape[1]),
                              int(landmarks[mp_hands.HandLandmark.WRIST]['y'] * image.shape[0])),
                             15, (0, 0, 255), -1)
                 
                 elif self.current_gesture == "OPEN_PALM":
-                    # Highlight fingertips in yellow
                     for tip_id in [mp_hands.HandLandmark.THUMB_TIP, 
                                   mp_hands.HandLandmark.INDEX_FINGER_TIP,
                                   mp_hands.HandLandmark.MIDDLE_FINGER_TIP,
@@ -324,34 +285,28 @@ class GestureRecognizer:
                                 8, (0, 255, 255), -1)
                 
                 elif "POINTING" in self.current_gesture:
-                    # Draw arrow in direction of pointing
                     index_tip = (int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_TIP]['x'] * image.shape[1]),
                                 int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_TIP]['y'] * image.shape[0]))
                     
-                    # Direction vector based on gesture
                     dx, dy = 0, 0
                     if self.current_gesture == "POINTING_UP": dy = -50
                     elif self.current_gesture == "POINTING_DOWN": dy = 50
                     elif self.current_gesture == "POINTING_LEFT": dx = -50
                     elif self.current_gesture == "POINTING_RIGHT": dx = 50
                     
-                    # Draw direction arrow
                     cv2.arrowedLine(image, index_tip, 
                                    (index_tip[0] + dx, index_tip[1] + dy),
                                    (255, 0, 0), 3)
                 
                 elif self.current_gesture == "PINCH":
-                    # Highlight pinch points
                     thumb_tip = (int(landmarks[mp_hands.HandLandmark.THUMB_TIP]['x'] * image.shape[1]),
                                 int(landmarks[mp_hands.HandLandmark.THUMB_TIP]['y'] * image.shape[0]))
                     index_tip = (int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_TIP]['x'] * image.shape[1]),
                                 int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_TIP]['y'] * image.shape[0]))
                     
-                    # Draw circle at pinch center
                     pinch_center = ((thumb_tip[0] + index_tip[0])//2, (thumb_tip[1] + index_tip[1])//2)
                     cv2.circle(image, pinch_center, 10, (255, 0, 255), -1)
                 
-                # Draw palm center for reference
                 palm_x = int(np.mean([
                     landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP]['x'],
                     landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]['x'],
@@ -368,7 +323,6 @@ class GestureRecognizer:
                 
                 cv2.circle(image, (palm_x, palm_y), 10, (0, 255, 0), -1)
                 
-            # Add gesture text with larger font and background
             cv2.rectangle(image, (10, 10), (300, 60), (0, 0, 0), -1)
             cv2.putText(image, f"Gesture: {self.current_gesture}", 
                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
@@ -378,174 +332,19 @@ class GestureRecognizer:
     def close(self):
         self.hands.close()
 
-
-class Drone3D:
-    def __init__(self):
-        self.position = [0, 0, 0]
-        self.rotation = [0, 0, 0]
-        self.size = 1.0
-        self.color = (0.0, 0.7, 1.0)
-        self.trail = []
-        self.trail_max_length = TRAIL_LENGTH
-        
-    def update_position(self, new_position):
-        self.position = new_position
-        if ENABLE_TRAIL:
-            self.trail.append(list(self.position))
-            if len(self.trail) > self.trail_max_length:
-                self.trail.pop(0)
-    
-    def update_rotation(self, new_rotation):
-        self.rotation = new_rotation
-    
-    def draw(self):
-        glPushMatrix()
-        
-        glTranslatef(self.position[0], self.position[1], self.position[2])
-        glRotatef(self.rotation[0], 1, 0, 0)
-        glRotatef(self.rotation[1], 0, 1, 0)
-        glRotatef(self.rotation[2], 0, 0, 1)
-
-        # Draw drone body (central sphere)
-        glColor3f(*self.color)
-        quad = gluNewQuadric()
-        gluSphere(quad, self.size * 0.5, 16, 16)
-        
-        # Draw rotors (4 smaller spheres)
-        rotor_positions = [
-            [self.size, 0, self.size],
-            [self.size, 0, -self.size],
-            [-self.size, 0, self.size],
-            [-self.size, 0, -self.size]
-        ]
-        
-        glColor3f(0.8, 0.8, 0.8)
-        for pos in rotor_positions:
-            glPushMatrix()
-            glTranslatef(pos[0], pos[1], pos[2])
-            gluSphere(quad, self.size * 0.25, 8, 8)
-            glPopMatrix()
-            
-            glPushMatrix()
-            glBegin(GL_LINES)
-            glVertex3f(0, 0, 0)
-            glVertex3f(pos[0], pos[1], pos[2])
-            glEnd()
-            glPopMatrix()
-        
-        glPopMatrix()
-        
-        # Draw trail
-        if ENABLE_TRAIL and len(self.trail) > 1:
-            glPushMatrix()
-            glBegin(GL_LINE_STRIP)
-            
-            for i, pos in enumerate(self.trail):
-                alpha = i / len(self.trail)
-                glColor4f(TRAIL_COLOR[0]/255, TRAIL_COLOR[1]/255, TRAIL_COLOR[2]/255, alpha * TRAIL_COLOR[3]/255)
-                glVertex3f(pos[0], pos[1], pos[2])
-            
-            glEnd()
-            glPopMatrix()
-
-
-class Scene3D:
-    def __init__(self, width, height):
-        self.width = width
-        self.height = height
-        self.drone = Drone3D()
-        self.setup_gl()
-        
-    def setup_gl(self):
-        glViewport(0, 0, self.width, self.height)
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        gluPerspective(45, (self.width / self.height), 0.1, 100.0)
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-        
-        gluLookAt(0, 5, 15, 0, 0, 0, 0, 1, 0)
-        
-        glEnable(GL_DEPTH_TEST)
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glEnable(GL_LINE_SMOOTH)
-        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
-        
-    def resize(self, width, height):
-        self.width = width
-        self.height = height
-        glViewport(0, 0, width, height)
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        gluPerspective(45, (width / height), 0.1, 100.0)
-        glMatrixMode(GL_MODELVIEW)
-        
-    def draw_grid(self):
-        glBegin(GL_LINES)
-        
-        # Ground grid
-        glColor4f(0.5, 0.5, 0.5, 0.5)
-        grid_size = GRID_SIZE
-        grid_count = GRID_COUNT
-        
-        for i in range(-grid_count, grid_count + 1):
-            # X lines
-            glVertex3f(i * grid_size / grid_count, 0, -grid_size)
-            glVertex3f(i * grid_size / grid_count, 0, grid_size)
-            
-            # Z lines
-            glVertex3f(-grid_size, 0, i * grid_size / grid_count)
-            glVertex3f(grid_size, 0, i * grid_size / grid_count)
-        
-        # Coordinate axes
-        # X axis - red
-        glColor3f(1.0, 0.0, 0.0)
-        glVertex3f(0, 0, 0)
-        glVertex3f(grid_size, 0, 0)
-        
-        # Y axis - green
-        glColor3f(0.0, 1.0, 0.0)
-        glVertex3f(0, 0, 0)
-        glVertex3f(0, grid_size, 0)
-        
-        # Z axis - blue
-        glColor3f(0.0, 0.0, 1.0)
-        glVertex3f(0, 0, 0)
-        glVertex3f(0, 0, grid_size)
-        
-        glEnd()
-        
-    def render(self):
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glLoadIdentity()
-        
-        gluLookAt(0, 5, 15, 0, 0, 0, 0, 1, 0)
-        
-        self.draw_grid()
-        self.drone.draw()
-        
-    def update_drone(self, position, rotation):
-        self.drone.update_position(position)
-        self.drone.update_rotation(rotation)
-
-
-class DroneSimulator:
-    def __init__(self, screen_width, screen_height, sim_area_rect):
+class DroneController:
+    def __init__(self, sim_area_rect):
         self.sim_rect = sim_area_rect
         
-        # 2D position (for legacy mode)
         self.drone_x = self.sim_rect.centerx
         self.drone_y = self.sim_rect.centery
         self.drone_rect = pygame.Rect(0, 0, DRONE_SIZE, DRONE_SIZE)
         self.drone_rect.center = (self.drone_x, self.drone_y)
         
-        # 3D position and orientation
         self.position = [0.0, 0.0, 0.0]
         self.rotation = [0.0, 0.0, 0.0]
         self.target_rotation = [0.0, 0.0, 0.0]
         
-        # Movement parameters
         self.speed = DRONE_SPEED
         self.vertical_speed = DRONE_VERTICAL_SPEED
         self.rotation_speed = DRONE_ROTATION_SPEED
@@ -553,23 +352,20 @@ class DroneSimulator:
         self.target_y = self.drone_y
         self.target_z = 0.0
         
-        # Control parameters
         self.command = "STOP"
         self.prev_command = "STOP"
         self.mode = "normal"
         
-        # For 3D visualization
-        if ENABLE_3D:
-            self.scene = Scene3D(sim_area_rect.width, sim_area_rect.height)
-        
-        # Drone trail for visualization
         self.trail = []
         self.trail_max_length = TRAIL_LENGTH
+        
+        self.ursina_drone = None
+        self.drone_model = None
+        self.trail_entities = []
         
     def update_command(self, gesture, vector=None, intensity=0.0):
         self.prev_command = self.command
         
-        # Mode switching based on special gestures
         if gesture == "PEACE":
             self.mode = "normal"
             self.command = "MODE_NORMAL"
@@ -593,7 +389,6 @@ class DroneSimulator:
             self.vertical_speed = max(1, self.vertical_speed - 0.5)
             return
         
-        # Normal mode commands
         if self.mode == "normal":
             if gesture == "FIST":
                 self.command = "STOP"
@@ -602,7 +397,6 @@ class DroneSimulator:
             elif "POINTING" in gesture:
                 self.command = gesture.replace("POINTING_", "MOVE_")
                 if vector is not None and gesture != "POINTING":
-                    # Set target position based on pointing direction
                     direction = gesture.split("_")[1]
                     intensity_factor = min(5.0, max(1.0, intensity * 3.0))
                     
@@ -615,7 +409,6 @@ class DroneSimulator:
                     elif direction == "RIGHT":
                         self.target_x = min(self.sim_rect.right, self.drone_x + self.speed * intensity_factor)
                     
-                    # Update 3D targets
                     self.target_position = [
                         (self.target_x - self.sim_rect.centerx) / 100.0,
                         0,
@@ -634,14 +427,12 @@ class DroneSimulator:
                     self.target_x = center_x + norm_x * self.sim_rect.width / 3
                     self.target_y = center_y + norm_y * self.sim_rect.height / 3
                     
-                    # Update 3D targets
                     self.target_position = [
                         (self.target_x - center_x) / 100.0,
                         0,
                         (self.target_y - center_y) / 100.0
                     ]
         
-        # Rotation mode commands
         elif self.mode == "rotation":
             if gesture == "POINTING_LEFT":
                 self.command = "ROTATE_LEFT"
@@ -659,7 +450,6 @@ class DroneSimulator:
                 self.command = "RESET_ROTATION"
                 self.target_rotation = [0, 0, 0]
         
-        # Height mode commands
         elif self.mode == "height":
             if gesture == "POINTING_UP":
                 self.command = "ASCEND"
@@ -674,7 +464,6 @@ class DroneSimulator:
                 self.target_z = 0.0
     
     def update(self):
-        # Move drone towards target position
         dx = self.target_x - self.drone_x
         dy = self.target_y - self.drone_y
         dz = self.target_z - self.position[1]
@@ -682,194 +471,377 @@ class DroneSimulator:
         distance = (dx**2 + dy**2)**0.5
         
         if distance > 1:
-            # Normalize and scale by speed
             move_x = dx * min(1, self.speed / distance)
             move_y = dy * min(1, self.speed / distance)
             
-            # Update position
             self.drone_x += move_x
             self.drone_y += move_y
             
-            # Keep within bounds
             self.drone_x = max(self.sim_rect.left, min(self.sim_rect.right, self.drone_x))
             self.drone_y = max(self.sim_rect.top, min(self.sim_rect.bottom, self.drone_y))
             
-            # Update rect
             self.drone_rect.center = (self.drone_x, self.drone_y)
         
-        # Update 3D position
         target_position = [
             (self.drone_x - self.sim_rect.centerx) / 100.0,
             self.target_z,
             (self.drone_y - self.sim_rect.centery) / 100.0
         ]
         
-        # Smooth interpolation for 3D position
         self.position[0] += (target_position[0] - self.position[0]) * 0.2
         self.position[1] += (target_position[1] - self.position[1]) * 0.2
         self.position[2] += (target_position[2] - self.position[2]) * 0.2
         
-        # Smooth interpolation for rotation
         for i in range(3):
             self.rotation[i] += (self.target_rotation[i] - self.rotation[i]) * 0.1
         
-        # Update trail
         if ENABLE_TRAIL:
             self.trail.append((self.drone_x, self.drone_y))
             if len(self.trail) > self.trail_max_length:
                 self.trail.pop(0)
         
-        # Update 3D scene
-        if ENABLE_3D:
-            self.scene.update_drone(self.position, self.rotation)
+        if ENABLE_3D and self.ursina_drone:
+            self.ursina_drone.x = self.position[0]
+            self.ursina_drone.y = self.position[1]
+            self.ursina_drone.z = self.position[2]
+            
+            self.ursina_drone.rotation_x = self.rotation[0]
+            self.ursina_drone.rotation_y = self.rotation[1]
+            self.ursina_drone.rotation_z = self.rotation[2]
+            
+            if ENABLE_TRAIL and hasattr(self, 'trail_entities'):
+                for e in self.trail_entities:
+                    if e is not None:
+                        try:
+                            destroy(e)
+                        except:
+                            pass
+                self.trail_entities = []
+                
+                if len(self.trail) > 1:
+                    for i in range(1, len(self.trail)):
+                        pos1 = ((self.trail[i-1][0] - self.sim_rect.centerx) / 100.0, 
+                                self.position[1], 
+                                (self.trail[i-1][1] - self.sim_rect.centery) / 100.0)
+                        pos2 = ((self.trail[i][0] - self.sim_rect.centerx) / 100.0, 
+                                self.position[1], 
+                                (self.trail[i][1] - self.sim_rect.centery) / 100.0)
+                        
+                        try:
+                            # Calculate distance between points
+                            dist = ((pos2[0]-pos1[0])**2 + (pos2[1]-pos1[1])**2 + (pos2[2]-pos1[2])**2)**0.5
+                            
+                            if dist > 0:  # Prevent issues with zero distance
+                                alpha = i / len(self.trail)
+                                color = ursina_color.rgba(TRAIL_COLOR[0]/255, TRAIL_COLOR[1]/255, TRAIL_COLOR[2]/255, alpha)
+                                
+                                # Create cube entity instead of cylinder for simplicity and less model dependency
+                                line = Entity(model='cube', 
+                                            position=((pos1[0] + pos2[0])/2, (pos1[1] + pos2[1])/2, (pos1[2] + pos2[2])/2), 
+                                            scale=(0.05, 0.05, dist),
+                                            color=color)
+                                
+                                # Calculate direction vector
+                                dir_x = pos2[0] - pos1[0]
+                                dir_y = pos2[1] - pos1[1]
+                                dir_z = pos2[2] - pos1[2]
+                                
+                                # Make entity look in the direction of movement
+                                if abs(dir_x) > 0.001 or abs(dir_z) > 0.001:
+                                    line.look_at(Vec3(pos2[0], pos2[1], pos2[2]), axis='forward')
+                                
+                                self.trail_entities.append(line)
+                        except Exception as e:
+                            print(f"Error creating trail: {e}")
     
-    def draw(self, surface):
-        # Draw 3D scene
-        if ENABLE_3D:
-            self.scene.render()
-        else:
-            # Legacy 2D rendering
-            # Draw drone trail
-            if ENABLE_TRAIL and len(self.trail) > 1:
+def draw(self, surface):
+    # Draw the drone in 2D (needed for ENABLE_2D mode or fallback)
+    if ENABLE_2D:
+        # Draw drone's trail 
+        if ENABLE_TRAIL and len(self.trail) > 1:
+            if len(self.trail) > 1:
                 for i in range(1, len(self.trail)):
+                    # Adjust alpha value based on position in trail for fade effect
                     alpha = int(255 * i / len(self.trail))
-                    color = (*TRAIL_COLOR[:3], alpha)
-                    pygame.draw.line(surface, color, self.trail[i-1], self.trail[i], 2)
-            
-            # Draw drone
-            pygame.draw.circle(surface, DRONE_COLOR, self.drone_rect.center, DRONE_SIZE//2)
-            
-            # Draw direction indicator
-            angle = math.atan2(self.target_y - self.drone_y, self.target_x - self.drone_x)
-            end_x = self.drone_x + math.cos(angle) * DRONE_SIZE
-            end_y = self.drone_y + math.sin(angle) * DRONE_SIZE
-            pygame.draw.line(surface, (255, 255, 255), self.drone_rect.center, (end_x, end_y), 3)
+                    trail_color = (TRAIL_COLOR[0], TRAIL_COLOR[1], TRAIL_COLOR[2], alpha)
+                    pygame.draw.line(surface, trail_color, self.trail[i-1], self.trail[i], 3)
         
-        # Draw command text
-        font = pygame.font.Font(None, 36)
-        mode_text = font.render(f"Mode: {self.mode.upper()}", True, TEXT_COLOR)
-        cmd_text = font.render(f"Command: {self.command}", True, TEXT_COLOR)
+        # Draw the drone itself
+        pygame.draw.rect(surface, DRONE_COLOR, self.drone_rect)
         
-        surface.blit(mode_text, (self.sim_rect.left + 10, self.sim_rect.top + 10))
-        surface.blit(cmd_text, (self.sim_rect.left + 10, self.sim_rect.top + 50))
+        # Draw direction indicator (simple arrow)
+        center = self.drone_rect.center
+        if self.command.startswith("MOVE_") or self.command == "FOLLOW":
+            end_point = (
+                center[0] + (self.target_x - self.drone_x) * 2,
+                center[1] + (self.target_y - self.drone_y) * 2
+            )
+            pygame.draw.line(surface, (255, 255, 0), center, end_point, 2)
+            
+        # Display status text
+        font = pygame.font.SysFont('Arial', 16)
+        info_text = f"Mode: {self.mode.upper()} | Command: {self.command}"
+        text_surface = font.render(info_text, True, TEXT_COLOR)
+        surface.blit(text_surface, (10, self.sim_rect.bottom - 30))
+        
+        speed_text = f"Speed: {self.speed} | Altitude: {abs(self.position[1])*10:.1f}m"
+        speed_surface = font.render(speed_text, True, TEXT_COLOR)
+        surface.blit(speed_surface, (10, self.sim_rect.bottom - 10))
 
+# The 3D integration needs to be handled differently to avoid the import error
+def initialize_3d_environment(drone_controller):
+    """Initializes the 3D environment for the drone simulation"""
+    from ursina import Ursina, Entity, EditorCamera, DirectionalLight, AmbientLight, Vec3, color, application
+    
+    app = Ursina()
+    
+    # Set up the camera
+    camera = EditorCamera()
+    camera.position = (3, 2, 3)
+    camera.rotation = (30, -45, 0)
+    camera.fov = 60
+    
+    # Create a ground plane with grid
+    ground = Entity(
+        model='plane',
+        scale=(GRID_SIZE * GRID_COUNT, 1, GRID_SIZE * GRID_COUNT),
+        color=color.rgb(50, 50, 60),
+        texture='white_cube',
+        texture_scale=(GRID_COUNT, GRID_COUNT),
+        collider='box'
+    )
+    
+    # Add grid lines
+    for i in range(-GRID_COUNT//2, GRID_COUNT//2 + 1):
+        # X axis lines
+        Entity(model='cube', 
+               scale=(GRID_SIZE * GRID_COUNT, 0.01, 0.01), 
+               position=(0, 0, i * GRID_SIZE), 
+               color=color.rgba(200, 200, 200, 0.3))
+        # Z axis lines
+        Entity(model='cube', 
+               scale=(0.01, 0.01, GRID_SIZE * GRID_COUNT), 
+               position=(i * GRID_SIZE, 0, 0), 
+               color=color.rgba(200, 200, 200, 0.3))
+    
+    # Create a drone entity (using a simple shape if model is not available)
+    try:
+        # Try to load the model, fall back to basic cube if model isn't available
+        drone_model = Entity(
+            model='cube',  # Using cube instead of potentially missing model
+            scale=(0.5, 0.2, 0.5),
+            color=color.rgb(DRONE_COLOR[0], DRONE_COLOR[1], DRONE_COLOR[2]),
+            position=(0, 0, 0)
+        )
+        
+        # Add propellers
+        propeller_positions = [
+            Vec3(0.25, 0.1, 0.25),  # Front-right
+            Vec3(-0.25, 0.1, 0.25),  # Front-left
+            Vec3(0.25, 0.1, -0.25),  # Back-right
+            Vec3(-0.25, 0.1, -0.25)  # Back-left
+        ]
+        
+        propellers = []
+        for pos in propeller_positions:
+            propeller = Entity(
+                parent=drone_model,
+                model='cube',  # Use cube instead of potentially missing cylinder
+                scale=(0.1, 0.02, 0.1),
+                position=pos,
+                color=color.rgb(80, 80, 80)
+            )
+            propellers.append(propeller)
+        
+        drone_controller.ursina_drone = drone_model
+        
+    except Exception as e:
+        print(f"Error creating drone model: {e}")
+        # Create a simple fallback drone
+        drone_model = Entity(
+            model='cube',
+            scale=0.5,
+            color=color.rgb(DRONE_COLOR[0], DRONE_COLOR[1], DRONE_COLOR[2]),
+            position=(0, 0, 0)
+        )
+        drone_controller.ursina_drone = drone_model
+    
+    # Add directional light
+    DirectionalLight(y=2, z=3, rotation=(30, -45, 0))
+    
+    # Add ambient light
+    AmbientLight(color=color.rgba(0.6, 0.6, 0.6, 0.6))
+    
+    return app, application
 
 def main():
     # Initialize pygame
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Drone Gesture Control")
+    pygame.display.set_caption("Gesture Controlled Drone Simulator")
     clock = pygame.time.Clock()
     
-    # Initialize areas
-    sim_area_width = int(SCREEN_WIDTH * SIM_AREA_WIDTH_RATIO)
-    video_area_width = SCREEN_WIDTH - sim_area_width
+    # Calculate areas for video feed and simulation
+    video_area_width = int(SCREEN_WIDTH * VIDEO_AREA_WIDTH_RATIO)
+    sim_area_width = SCREEN_WIDTH - video_area_width
     
-    sim_area_rect = pygame.Rect(0, 0, sim_area_width, SCREEN_HEIGHT)
     video_area_rect = pygame.Rect(sim_area_width, 0, video_area_width, SCREEN_HEIGHT)
+    sim_area_rect = pygame.Rect(0, 0, sim_area_width, SCREEN_HEIGHT)
     
-    # Initialize simulator
-    simulator = DroneSimulator(SCREEN_WIDTH, SCREEN_HEIGHT, sim_area_rect)
+    # Initialize the drone controller
+    drone_controller = DroneController(sim_area_rect)
     
     # Initialize webcam
     cap = cv2.VideoCapture(WEBCAM_INDEX)
+    
+    # Check if webcam was opened successfully
     if not cap.isOpened():
         print("Error: Could not open webcam.")
-        pygame.quit()
-        sys.exit()
+        return
     
-    # Initialize gesture recognizer
-    recognizer = GestureRecognizer()
+    # Initialize the gesture recognizer
+    gesture_recognizer = GestureRecognizer()
     
-    # Font setup
-    font = pygame.font.Font(None, 30)
+    # Flag to control if 3D simulation is running
+    ursina_initialized = False
+    ursina_app = None
+    ursina_application = None
+    
+    # Handle 3D environment initialization in main thread if enabled
+    if ENABLE_3D:
+        try:
+            print("Initializing 3D environment...")
+            ursina_app, ursina_application = initialize_3d_environment(drone_controller)
+            ursina_initialized = True
+        except Exception as e:
+            print(f"Error initializing 3D environment: {e}")
+            print("Falling back to 2D mode...")
+            global ENABLE_2D
+            ENABLE_2D = True
     
     running = True
+    last_gesture_time = time.time()
     
-    while running:
-        # Process events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+    try:
+        while running:
+            # Process events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
                     running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+            
+            # Read a frame from the webcam
+            ret, frame = cap.read()
+            if not ret:
+                print("Error: Could not read frame.")
+                break
+            
+            # Mirror the frame horizontally for more intuitive interaction
+            frame = cv2.flip(frame, 1)
+            
+            # Convert the frame to RGB for MediaPipe
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Process the frame with the gesture recognizer
+            gesture_recognizer.process_frame(frame_rgb)
+            
+            # Get landmarks and recognize gesture
+            landmarks = gesture_recognizer.get_landmarks()
+            
+            # Draw the landmarks on the frame
+            frame_with_landmarks = gesture_recognizer.draw_landmarks(frame.copy())
+            
+            # Check if a new gesture is detected
+            current_time = time.time()
+            if landmarks and current_time - last_gesture_time > 0.2:  # Throttle gesture updates
+                gesture, vector, intensity = gesture_recognizer.recognize(landmarks)
+                stable_gesture, stable_vector, stable_intensity = gesture_recognizer.get_stable_gesture(gesture, vector, intensity)
+                if stable_gesture != "UNKNOWN":
+                    drone_controller.update_command(stable_gesture, stable_vector, stable_intensity)
+                    last_gesture_time = current_time
+            
+            # Update drone position
+            drone_controller.update()
+            
+            # Clear the screen
+            screen.fill(BG_COLOR)
+            
+            # Draw the simulation area background
+            pygame.draw.rect(screen, SIM_BG_COLOR, sim_area_rect)
+            
+            # Draw the video area background
+            pygame.draw.rect(screen, VIDEO_BG_COLOR, video_area_rect)
+            
+            # Draw the drone in 2D mode
+            if ENABLE_2D:
+                drone_controller.draw(screen)
+            
+            # Convert the OpenCV frame to a Pygame surface
+            frame_rgb = cv2.cvtColor(frame_with_landmarks, cv2.COLOR_BGR2RGB)
+            frame_surface = pygame.surfarray.make_surface(frame_rgb.swapaxes(0, 1))
+            
+            # Scale the frame to fit the video area if needed
+            frame_height = int(video_area_width * frame_rgb.shape[0] / frame_rgb.shape[1])
+            if frame_height > SCREEN_HEIGHT:
+                frame_height = SCREEN_HEIGHT
+                frame_width = int(frame_height * frame_rgb.shape[1] / frame_rgb.shape[0])
+            else:
+                frame_width = video_area_width
+            
+            frame_surface = pygame.transform.scale(frame_surface, (frame_width, frame_height))
+            
+            # Position the frame in the video area
+            frame_pos_x = sim_area_width + (video_area_width - frame_width) // 2
+            frame_pos_y = (SCREEN_HEIGHT - frame_height) // 2
+            
+            # Draw the frame on the screen
+            screen.blit(frame_surface, (frame_pos_x, frame_pos_y))
+            
+            # Draw instructions
+            font = pygame.font.SysFont('Arial', 20)
+            instruction_y = frame_pos_y + frame_height + 10
+            
+            instructions = [
+                "Gesture Controls:",
+                "- FIST: Stop the drone",
+                "- OPEN_PALM: Hover in place",
+                "- POINTING: Move in the direction",
+                "- PINCH: Follow hand position",
+                "- PEACE: Switch to normal mode",
+                "- THREE FINGERS: Switch to rotation mode",
+                "- ROCK_ON: Switch to height mode",
+                "- THUMBS_UP/DOWN: Increase/decrease speed"
+            ]
+            
+            for instruction in instructions:
+                text_surface = font.render(instruction, True, TEXT_COLOR)
+                screen.blit(text_surface, (frame_pos_x, instruction_y))
+                instruction_y += 25
+            
+            # Update the display
+            pygame.display.flip()
+            
+            # Cap the frame rate
+            clock.tick(30)
+            
+    except Exception as e:
+        print(f"Error in main loop: {e}")
+    finally:
+        # Clean up resources
+        gesture_recognizer.close()
+        cap.release()
+        pygame.quit()
         
-        # Read webcam frame
-        ret, frame = cap.read()
-        if not ret:
-            continue
-        
-        # Flip horizontally for selfie view
-        frame = cv2.flip(frame, 1)
-        
-        # Convert to RGB for MediaPipe
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Process hand gestures
-        recognizer.process_frame(frame_rgb)
-        landmarks = recognizer.get_landmarks()
-        
-        if landmarks:
-            gesture, vector, intensity = recognizer.recognize(landmarks)
-            stable_gesture, stable_vector, stable_intensity = recognizer.get_stable_gesture(gesture, vector, intensity)
-            simulator.update_command(stable_gesture, stable_vector, stable_intensity)
-        else:
-            stable_gesture = "NO_HAND"
-            simulator.update_command("NO_HAND")
-        
-        # Update simulator
-        simulator.update()
-        
-        # Draw gesture visualization on frame
-        frame = recognizer.draw_landmarks(frame)
-        
-        # Convert frame to Pygame surface
-        frame = cv2.resize(frame, (video_area_rect.width, video_area_rect.height))
-        frame_surface = pygame.surfarray.make_surface(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).swapaxes(0, 1))
-        
-        # Fill screen with background colors
-        screen.fill(BG_COLOR)
-        pygame.draw.rect(screen, SIM_BG_COLOR, sim_area_rect)
-        pygame.draw.rect(screen, VIDEO_BG_COLOR, video_area_rect)
-        
-        # Draw simulator
-        simulator.draw(screen)
-        
-        # Draw webcam frame
-        screen.blit(frame_surface, video_area_rect.topleft)
-        
-        # Add gesture label
-        gesture_text = font.render(f"Gesture: {stable_gesture}", True, GESTURE_TEXT_COLOR)
-        screen.blit(gesture_text, (video_area_rect.left + 10, video_area_rect.bottom - 40))
-        
-        # Add instruction text
-        instructions = [
-            "Controls:",
-            "FIST: Stop",
-            "OPEN_PALM: Hover",
-            "POINTING: Move direction",
-            "PINCH: Follow hand",
-            "PEACE: Normal mode",
-            "THREE: Rotation mode",
-            "ROCK_ON: Height mode",
-            "THUMBS_UP/DOWN: Speed up/down"
-        ]
-        
-        for i, text in enumerate(instructions):
-            help_text = font.render(text, True, TEXT_COLOR)
-            screen.blit(help_text, (video_area_rect.left + 10, video_area_rect.top + 10 + i * 30))
-        
-        # Update display
-        pygame.display.flip()
-        clock.tick(60)
-    
-    # Cleanup
-    recognizer.close()
-    cap.release()
-    pygame.quit()
-    sys.exit()
-
+        # Properly close Ursina
+        if ursina_initialized and ursina_application:
+            try:
+                # Use the proper method to exit Ursina
+                ursina_application.quit()
+            except Exception as e:
+                print(f"Error while closing Ursina: {e}")
 
 if __name__ == "__main__":
+    # Run the main function directly in the main thread
     main()
